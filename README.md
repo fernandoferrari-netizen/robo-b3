@@ -32,11 +32,31 @@ Depois de conectado, o que você muda num aparelho aparece no outro em cerca de 
 
 **Atenção:** quem tiver o link vê e muda seus dados. Não compartilhe. A chave da brapi (preços automáticos) fica só no aparelho onde foi digitada e não é sincronizada.
 
+## Mostrar a carteira para outra pessoa (só ver)
+
+Para outra pessoa avaliar o site **com os seus dados**, sem poder mudar nada seu:
+
+1. Com a sincronização ligada, abra o bloco **Mostrar a carteira para outra pessoa (só ver)** e toque em **Criar link para só ver**.
+2. Toque em **Enviar link** (ou **Copiar link**) e mande para a pessoa. O link termina em `#ver=…`.
+3. Ela abre o link no navegador dela. O site baixa uma **cópia** da carteira e mostra um aviso no topo ("Você está vendo uma cópia"). Ela pode testar tudo: o que ela mexer fica **só no navegador dela**, num espaço separado, e nunca volta para você.
+4. Depois de mudar algo, toque em **Atualizar o que ela vê**; ela toca em **Atualizar a cópia** para receber a versão nova.
+5. Para encerrar, toque em **Parar de compartilhar**: o link deixa de funcionar na hora.
+
+O que vai na cópia: ações e fundos, rendimentos, dados de cada investimento, preços e regras. **Não vão**: o diário (anotações), a chave de sincronização e a chave da brapi.
+
+Regras de segurança:
+
+- A chave do link (`#ver=`) é **outra** chave, gerada pelo servidor. Ela só serve para **ler** a cópia: não sincroniza, não apaga e não compartilha. O servidor guarda só o *hash* dela.
+- O link vale por **30 dias desde a última atualização**. Parar de compartilhar, apagar a cópia na nuvem ou desligar a sincronização (neste último caso o site para o link antes) também encerram o link.
+- Quem recebe o link e já tem dados próprios no navegador é perguntada antes; os dados dela não são tocados e ela volta a eles em **Sair da visualização**.
+- **Nunca** envie o link de sincronização (`#sync=…`) nem o link de recuperação (`#restaurar=…`): eles dão acesso aos seus dados.
+
 ## Como funciona
 
 - Cada aparelho guarda seus dados no navegador e envia as mudanças para `/api/sync`, que junta tudo documento por documento. Se o mesmo item for mudado nos dois aparelhos, vale a edição mais recente.
 - Apagar um item vira uma "lápide" na nuvem, para a exclusão chegar aos outros aparelhos (lápides com mais de 120 dias são limpas).
 - Limites: 4.000 documentos e 2,5 MB por grupo; um documento tem no máximo 60 mil caracteres.
+- Link só para ver: uma cópia por grupo, com até 1.500 documentos e 600 mil caracteres; vale 30 dias desde a última atualização (`share`, `view` e `unshare` em `/api/sync`; blocos `p/` e `s/`).
 - Em Netlify, a função usa `@netlify/blobs` com leitura forte e gravação condicional (sem perder edição quando dois aparelhos enviam ao mesmo tempo).
 
 ## Testes

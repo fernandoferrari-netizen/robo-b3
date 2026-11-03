@@ -236,6 +236,11 @@ details.more>.pane{padding:2px 16px 18px;display:grid;gap:14px}
 .sy-st.warn .dot{background:var(--prazo-text)}
 .sy-st.bad .dot{background:var(--stop-text)}
 
+/* link só para ver */
+.viewbar{border-left:4px solid var(--accent)}
+.viewbar h2{display:flex;align-items:center;gap:2px}
+#viewbar:empty{display:none}
+
 .foot{font-size:13px;color:var(--ink-3);line-height:1.5;display:grid;gap:6px}
 .toast{position:fixed;left:max(16px,env(safe-area-inset-left,0px));right:max(16px,env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));max-width:528px;margin:0 auto;background:var(--ink);color:var(--bg);padding:13px 15px;border-radius:12px;font-size:15px;z-index:20}
 @media (max-width:360px){.rules-row{grid-template-columns:1fr}}
@@ -244,6 +249,7 @@ details.more>.pane{padding:2px 16px 18px;display:grid;gap:14px}
 </head>
 <body>
 <main class="app" id="app">
+  <section id="viewbar"></section>
   <header class="top">
     <div>
       <h1 id="h1">Robô B3</h1>
@@ -286,7 +292,8 @@ details.more>.pane{padding:2px 16px 18px;display:grid;gap:14px}
   <details class="more" data-more="hist"><summary>Histórico</summary><div class="pane"><div id="closed"></div><div id="diary"></div></div></details>
   <details class="more" id="m-test" data-more="test" hidden><summary>Teste do robô (sem dinheiro de verdade)</summary><div class="pane" id="radar"></div></details>
   <details class="more" id="m-sync" data-more="sync" hidden><summary id="sync-sum">Sincronizar celular e computador</summary><div class="pane" id="sync"></div></details>
-  <details class="more" data-more="backup"><summary>Cópia de segurança</summary><div class="pane" id="backup"></div></details>
+  <details class="more" id="m-share" data-more="share" hidden><summary id="share-sum">Mostrar a carteira para outra pessoa (só ver)</summary><div class="pane" id="share"></div></details>
+  <details class="more" id="m-backup" data-more="backup"><summary>Cópia de segurança</summary><div class="pane" id="backup"></div></details>
 
   <footer class="foot">
     <p>Ferramenta de apoio pessoal: o robô aplica regras e mostra o que elas indicam. Não é recomendação de investimento e não envia ordens. Quem compra e vende é você, na corretora.</p>
@@ -373,9 +380,9 @@ function normTicker(t) { var m = /^([A-Z][A-Z0-9]{3}\d{1,2})F?$/.exec(String(t |
 var storageFail = false; // true se o navegador não deixou gravar os dados
 /* ---------- armazenamento: db do artifact, ou local se o db não existir ---------- */
 function makeLocalDb() {
-  var KEY = 'robo-b3-local-v1', store = {}, subs = [];
+  var KEY = VIEW ? K_VIEW_DATA : K_LOCAL, store = {}, subs = [];
   try { store = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { store = {}; }
-  function persist() { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { storageFail = true; } }
+  function persist() { if (VIEW_LOCK) return; try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { storageFail = true; } }
   function snapDoc(path) { return { id: path.split('/').pop(), exists: Object.prototype.hasOwnProperty.call(store, path), data: function () { return store[path]; } }; }
   function snapCol(col) {
     var docs = Object.keys(store).filter(function (p) { return p.indexOf(col + '/') === 0 && p.split('/').length === 2; }).sort().map(snapDoc);
@@ -1369,6 +1376,7 @@ function renderVerdict(items) {
 // Pedido de recuperação (por link ou por texto colado): aparece no topo, com a confirmação.
 function renderLink() {
   var el = $('#linkbox'), r = S.ui.restore;
+  if (S.ui.vjoin) { el.innerHTML = viewJoinHtml(); return; }
   if (S.ui.join && S.ready.pos) { el.innerHTML = syncJoinHtml(); return; }
   if (!r && S.ready.pos && S.ready.rcfg && S.rmeta.aviso && S.cfg.mode === 'renda') { el.innerHTML = migHtml(); return; }
   if (!r || !S.ready.pos) { el.innerHTML = ''; return; }
@@ -1583,8 +1591,8 @@ function renderPrint() {
 function render() {
   var renda = S.cfg.mode === 'renda', items = [];
   try { items = renda ? rendaItems() : openItems(); } catch (e) { console.error(e); }
-  safely(renderHead);
-  safely(renderVerdict, items); safely(renderLink); safely(renderHint); safely(renderQuotes); safely(renderSummary, items); safely(renderPrint); safely(renderCards, items); safely(renderMove); safely(renderKeep); safely(renderBuy); safely(renderRadar); safely(renderNewPos); safely(renderRules); safely(renderGuia); safely(renderClosed); safely(renderDiary); safely(renderSync); safely(renderBackup); safely(renderFoot);
+  safely(renderHead); safely(renderViewBar);
+  safely(renderVerdict, items); safely(renderLink); safely(renderHint); safely(renderQuotes); safely(renderSummary, items); safely(renderPrint); safely(renderCards, items); safely(renderMove); safely(renderKeep); safely(renderBuy); safely(renderRadar); safely(renderNewPos); safely(renderRules); safely(renderGuia); safely(renderClosed); safely(renderDiary); safely(renderSync); safely(renderShare); safely(renderBackup); safely(renderFoot);
   $('#btn-new').textContent = S.ui.newOpen ? 'Fechar' : (renda ? '+ Comprei' : '+ Adicionar');
 }
 
@@ -2838,6 +2846,11 @@ function parseAny(text) {
 // Ao abrir um link de recuperação, só pergunta (a pessoa confirma no topo da página). Limpa o endereço para não perguntar de novo ao recarregar.
 function readLink() {
   var hs = String(location.hash || '');
+  if (/^#ver=/.test(hs)) { viewLink(hs); return; }
+  if (VIEW) { // vendo uma cópia: links de sincronização e de recuperação não funcionam aqui
+    if (/^#(sync|restaurar)=/.test(hs)) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} toast('Você está vendo uma cópia: esse link não funciona aqui. Toque em “Sair da visualização” primeiro.'); }
+    return;
+  }
   if (/^#sync=/.test(hs)) { syncLink(hs); return; }
   var m = /^#restaurar=([A-Za-z0-9_\-]+)$/.exec(hs);
   if (!m) return;
@@ -2897,7 +2910,9 @@ function copyOut(txt, okMsg) {
 function copyBackup() { copyOut(backupText(), 'Cópia copiada. Cole em um lugar seguro, como suas notas.'); }
 function copyLink() { copyOut(restoreLink(), 'Link copiado. Cole nas suas Notas: ao abrir o link neste site, as ações voltam.'); }
 function renderBackup() {
-  var el = $('#backup');
+  var el = $('#backup'), box = $('#m-backup');
+  if (box && box.hidden !== !!VIEW) box.hidden = !!VIEW;
+  if (VIEW) { el.innerHTML = ''; return; }
   el.innerHTML = '<p class="muted">' + (SY.id ? 'Seus dados ficam ' + (installedApp() ? 'neste app' : 'neste navegador') + ' e numa cópia na nuvem, no seu próprio site (sincronização ligada).' : 'Seus dados ficam só ' + (installedApp() ? 'neste app, separados do Safari.' : 'neste navegador.')) + ib('copia2') + ' Guarde uma cópia para não perder seus dados.</p>' + ibox('copia2', SY.id ? INFO.copiaSync : INFO.copia) +
     '<div class="row actions"><button class="btn primary" type="button" data-act="bk-link">Copiar link de recuperação</button><button class="btn" type="button" data-act="bk-copy">Copiar texto da cópia</button></div>' +
     '<p class="muted">Cole o link nas suas Notas. Para recuperar, abra o link neste site ou cole aqui embaixo.' + (S.cfg.mode === 'renda' ? ' A cópia leva também os dados de cada investimento e os rendimentos que você registrou (o link leva os 60 mais recentes; o texto da cópia, todos).' : '') + '</p>' +
@@ -3119,6 +3134,7 @@ function syncOff() {
   clearTimeout(SY.timer); SY.timer = null;
   SY.id = null; SY.t = {}; SY.dirty = {}; SY.st = 'off'; SY.tries = 0; SY.last = 0; SY.big = 0; SY.full = ''; SY.skew = 0;
   LS.del(K_SYNC);
+  try { if (DBH && DBH.raw && DBH.raw.has('robo/share')) DBH.raw.apply({ 'robo/share': null }); } catch (e) {} // sem sincronização não há como gerenciar o link só para ver
 }
 function syncStart() {
   SY.on = true; SY.act = Date.now();
@@ -3276,11 +3292,11 @@ function syncOnHtml() {
     '<p class="muted">No outro aparelho, abra o link e toque em “Sim, conectar”. Quem tiver o link vê e muda seus dados: não compartilhe com ninguém.</p>' +
     '<div class="row actions"><button class="btn" type="button" data-act="sy-off">Desligar neste aparelho</button>' +
     '<button class="btn danger" type="button" data-act="sy-wipe">' + (S.ui.syWipe ? 'Toque de novo para apagar' : 'Apagar a cópia na nuvem') + '</button></div>' +
-    '<p class="muted">Desligar: os dados continuam aqui, mas param de acompanhar os outros aparelhos. Apagar a cópia: tira tudo da nuvem e desliga todos os aparelhos; os dados de cada aparelho ficam onde estão.</p>';
+    '<p class="muted">Desligar: os dados continuam aqui, mas param de acompanhar os outros aparelhos' + (SHARE ? ' (e o link “só para ver” é desativado)' : '') + '. Apagar a cópia: tira tudo da nuvem, desliga todos os aparelhos e também desativa o link “só para ver”; os dados de cada aparelho ficam onde estão.</p>';
   return h;
 }
 function renderSync() {
-  var det = $('#m-sync'), el = $('#sync'), show = !!(hosted && localMode && DBH && DBH.raw);
+  var det = $('#m-sync'), el = $('#sync'), show = !!(hosted && localMode && DBH && DBH.raw && !VIEW);
   if (!det || !el) return;
   if (det.hidden === show) det.hidden = !show;
   if (!show) { el.innerHTML = ''; return; }
@@ -3289,11 +3305,11 @@ function renderSync() {
   el.innerHTML = SY.id ? syncOnHtml() : syncOffHtml();
 }
 function syncHintShow() {
-  return !!(hosted && localMode && DBH && DBH.raw && !SY.id && !S.ui.restore && !S.ui.join && !LS.get(K_SYNC_HINT) && !(S.rmeta.aviso && S.cfg.mode === 'renda'));
+  return !!(hosted && localMode && DBH && DBH.raw && !VIEW && !SY.id && !S.ui.restore && !S.ui.join && !S.ui.vjoin && !LS.get(K_SYNC_HINT) && !(S.rmeta.aviso && S.cfg.mode === 'renda'));
 }
 // Convite para ligar a sincronização: fica numa seção própria, logo abaixo dos avisos, e só aparece quando não há outro aviso na tela.
 function renderHint() {
-  var el = $('#synchint'), free = S.ready.pos && !$('#linkbox').innerHTML;
+  var el = $('#synchint'), free = S.ready.pos && !VIEW && !$('#linkbox').innerHTML;
   el.innerHTML = free && syncAttn() ? syncAttnHtml() : free && syncHintShow() ? syncHintHtml() : '';
 }
 // Aviso no topo só quando a sincronização travou de um jeito que a pessoa precisa resolver (sem internet é normal e não avisa).
@@ -3327,7 +3343,15 @@ var SYNC_ACTIONS = {
   'sy-retry': function () { if (SY.id) { SY.st = 'idle'; SY.retryAt = 0; syncRun(true); } },
   'sy-link': function () { syncCopyLink(); },
   'sy-share': function () { syncShare(); },
-  'sy-off': function () { syncOff(); S.ui.syMsg = ''; S.ui.syShow = ''; toast('Sincronização desligada neste aparelho. Seus dados continuam aqui.'); sched(); },
+  'sy-off': function () {
+    function done() { syncOff(); S.ui.syMsg = ''; S.ui.syShow = ''; toast('Sincronização desligada neste aparelho. Seus dados continuam aqui.'); sched(); }
+    if (!SHARE || !SY.id) { done(); return; }
+    // Há um link “só para ver” ativo: ele é desativado antes de desligar, para não ficar valendo sem que ninguém consiga parar.
+    syncHttp('POST', { v: 1, id: SY.id, op: 'unshare' }).then(function (res) {
+      if (!(res.status === 200 && res.json && res.json.ok === true)) { toast(res.net ? 'Sem conexão: não consegui parar o link “só para ver”, então a sincronização continua ligada.' : 'Não consegui parar o link “só para ver” agora. Tente de novo.'); return; }
+      return DBH.doc('robo/share').delete().then(function () { return syncRun(false); }).then(done);
+    }).catch(function (e) { console.error(e); toast('Não consegui desligar agora. Tente de novo.'); });
+  },
   'sy-wipe': function () { syncWipe(); },
   'sy-recreate': function () { syncRecreate(); },
   'sy-paste': function () {
@@ -3338,6 +3362,281 @@ var SYNC_ACTIONS = {
   'sy-join': function () { syncJoin(false); },
   'sy-join-clean': function () { var j = S.ui.join; if (!j || j.busy) return; if (!j.sure) { j.sure = true; sched(); return; } syncJoin(true); },
   'sy-join-no': function () { S.ui.join = null; sched(); }
+};
+
+/* ---------- link “só para ver”: mostrar a carteira a outra pessoa ---------- */
+// Quem cria o link (o dono) publica uma CÓPIA da carteira na nuvem do próprio site e recebe uma chave de leitura, diferente da chave de
+// sincronização. A outra pessoa abre o link, baixa a cópia e passa a ver tudo num espaço separado do navegador dela: pode testar à vontade,
+// mas nada volta para o dono. A chave de leitura só serve para ler a cópia; não sincroniza, não apaga e não compartilha. Vale por 30 dias.
+// O diário (anotações) não vai na cópia. A chave de sincronização e a de preços (brapi) nunca entram.
+var K_LOCAL = 'robo-b3-local-v1', K_VIEW = 'robo-b3-view-v1', K_VIEW_DATA = 'robo-b3-view-local-v1';
+var VIEW_MAX_DOCS = 1500, VIEW_TTL = 30 * 86400000;
+var VIEW_LOCK = false; // true entre gravar a cópia nova e recarregar a página: nada da página antiga pode regravar por cima
+var VIEW = null;   // quando não é nulo, este navegador está mostrando uma cópia que outra pessoa compartilhou (dados à parte dos próprios)
+var SHARE = null;  // dono: o link só para ver que está ativo ({ vid, at }); vive no documento robo/share, que sincroniza entre os aparelhos dele
+
+Object.assign(INFO, {
+  ver: 'O link “só para ver” entrega a outra pessoa uma cópia da sua carteira: ações, rendimentos, preços, regras e o que o site sugere (comprar, vender, esperar). Ela abre no navegador dela e pode testar tudo, mas o que ela mexer fica só lá: nada volta para os seus dados. O diário (suas anotações) não vai. Ela vê a carteira como estava quando você criou ou atualizou o link, e o link vale por 30 dias desde a última atualização. Você pode parar de compartilhar quando quiser. Quem tem o link vê a carteira, então envie só para quem você confia.',
+  ver2: 'Esta é uma cópia da carteira de quem compartilhou com você, tirada na data mostrada. Você pode mexer e testar à vontade: o que você mudar fica só neste navegador, separado dos seus dados, e não altera a carteira original. “Atualizar a cópia” traz a versão mais nova que a pessoa publicou (e apaga o que você mudou nos testes). “Sair da visualização” apaga esta cópia daqui e volta ao site normal.'
+});
+var SHERR = {
+  net: SYERR.net,
+  server: SYERR.server,
+  noserver: 'Este site ainda não tem o compartilhamento instalado. Publique de novo pelo GitHub (veja o passo a passo).',
+  big: 'A carteira ficou grande demais para compartilhar.',
+  missing: 'A cópia da sincronização não existe mais. Veja o painel “Sincronizar celular e computador”.',
+  dead: 'Esse link não funciona mais (venceu ou foi interrompido). Crie um link novo.'
+};
+var VERR = {
+  net: SYERR.net,
+  unknown: 'Esse link não funciona mais: a pessoa parou de compartilhar, o link venceu ou ele está incompleto. Peça um link novo.',
+  server: SYERR.server,
+  noserver: 'Este site ainda não tem o compartilhamento instalado. Avise quem compartilhou.',
+  quota: 'O navegador não deixou guardar a cópia (falta de espaço). Libere espaço e tente de novo.',
+  big: 'A cópia é grande demais para este navegador.'
+};
+
+/* ----- quem recebe o link ----- */
+function viewLoad() {
+  VIEW = null;
+  var o = null; try { o = JSON.parse(LS.get(K_VIEW) || 'null'); } catch (e) { o = null; }
+  if (!o || o.v !== 1 || typeof o.id !== 'string' || !SYNC_ID.test(o.id)) return;
+  VIEW = { id: o.id, at: Number.isFinite(o.at) ? o.at : 0, got: Number.isFinite(o.got) ? o.got : 0, sum: typeof o.sum === 'string' ? o.sum : '' };
+}
+// “Impressão digital” do texto salvo: serve para saber se a pessoa mexeu na cópia (e avisar antes de apagar os testes dela).
+function viewSum(s) { var h = 5381, i; s = String(s || ''); for (i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; return s.length + ':' + h.toString(36); }
+function viewDirty() { return !!VIEW && viewSum(LS.get(K_VIEW_DATA)) !== VIEW.sum; }
+function viewParseId(text) {
+  var m = /#ver=([A-Za-z0-9_-]{32,64})(?![A-Za-z0-9_-])/.exec(String(text || ''));
+  return m ? m[1] : null;
+}
+// A cópia vem de fora: só entram documentos de verdade (caminho válido, objeto, tamanho razoável). O diário e a chave do link nunca entram.
+function viewClean(docs) {
+  var map = {}, n = 0;
+  Object.keys(docs).forEach(function (p) {
+    var v = docs[p];
+    if (!syncPathOk(p) || /^(diario|radar)\//.test(p) || p === 'robo/share') return;
+    if (!v || typeof v !== 'object' || Array.isArray(v) || n >= VIEW_MAX_DOCS) return;
+    if (JSON.stringify(v).length > SYNC_DOC_MAX) return;
+    map[p] = v; n++;
+  });
+  var rc = map['renda/config'] || {};
+  map['renda/config'] = Object.assign({}, rc, { aviso: false, anterior: null, visto: rc.visto > 0 ? rc.visto : Date.now() }); // nada de aviso de migração na cópia
+  return map;
+}
+function viewFetch(id) {
+  return syncHttp('POST', { v: 1, id: id, op: 'view' }).then(function (res) {
+    var j = res.json;
+    if (res.status === 200 && j && j.ok === true && j.docs && typeof j.docs === 'object' && !Array.isArray(j.docs) && Number.isFinite(j.at)) return { ok: true, at: j.at, docs: j.docs };
+    var k = syncErrKey(res);
+    return { err: k === 'net' || k === 'unknown' || k === 'noserver' ? k : 'server' };
+  });
+}
+function viewStore(id, f) {
+  var data = JSON.stringify(viewClean(f.docs));
+  if (!LS.set(K_VIEW_DATA, data)) return false;
+  if (!LS.set(K_VIEW, JSON.stringify({ v: 1, id: id, at: f.at, got: Date.now(), sum: viewSum(data) }))) { LS.del(K_VIEW_DATA); return false; }
+  VIEW_LOCK = true;
+  return true;
+}
+function viewReload() { try { location.reload(); } catch (e) { location.href = location.pathname; } }
+// Há dados próprios neste navegador? (lido direto do armazenamento: roda antes de o site carregar os dados)
+function ownHasData() {
+  var o = null; try { o = JSON.parse(LS.get(K_LOCAL) || 'null'); } catch (e) { o = null; }
+  if (o && typeof o === 'object' && Object.keys(o).some(function (p) { return /^(posicoes|ativos|rendimentos|diario)\//.test(p); })) return true;
+  return !!LS.get(K_SYNC);
+}
+function viewLink(hs) {
+  try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+  var id = viewParseId(hs);
+  if (!id) { toast('Esse link está incompleto. Copie de novo, inteiro.'); return; }
+  if (VIEW && VIEW.id === id) { toast('Você já está vendo esta carteira. Para trazer a versão mais nova, toque em “Atualizar a cópia”.'); return; }
+  var ask = !!VIEW || ownHasData();
+  S.ui.vjoin = { id: id, ask: ask, swap: !!VIEW, busy: false, err: '' };
+  if (!ask) viewGo(); // navegador sem dados próprios: abre direto (não há nada para proteger)
+}
+function viewGo() {
+  var j = S.ui.vjoin; if (!j || j.busy) return;
+  j.busy = true; j.err = ''; sched();
+  viewFetch(j.id).then(function (r) {
+    if (r.err) { j.busy = false; j.err = r.err; sched(); return; }
+    if (!viewStore(j.id, r)) { j.busy = false; j.err = 'quota'; sched(); return; }
+    viewReload();
+  }).catch(function (e) { console.error(e); j.busy = false; j.err = 'server'; sched(); });
+}
+function viewRefresh() {
+  if (!VIEW || S.ui.vbusy) return;
+  if (viewDirty() && S.ui.vsure !== 'upd') { viewSure('upd'); return; }
+  S.ui.vsure = ''; S.ui.vbusy = 'upd'; S.ui.verr = ''; sched();
+  viewFetch(VIEW.id).then(function (r) {
+    S.ui.vbusy = '';
+    if (r.err) { S.ui.verr = r.err; sched(); return; }
+    if (r.at === VIEW.at && !viewDirty()) { toast('Você já está com a cópia mais nova.'); sched(); return; }
+    if (!viewStore(VIEW.id, r)) { S.ui.verr = 'quota'; sched(); return; }
+    viewReload();
+  }).catch(function (e) { console.error(e); S.ui.vbusy = ''; S.ui.verr = 'server'; sched(); });
+}
+function viewSure(what) { S.ui.vsure = what; sched(); setTimeout(function () { if (S.ui.vsure === what) { S.ui.vsure = ''; sched(); } }, 6000); }
+function viewExit() {
+  if (!VIEW) return;
+  if (viewDirty() && S.ui.vsure !== 'exit') { viewSure('exit'); return; }
+  VIEW_LOCK = true; LS.del(K_VIEW); LS.del(K_VIEW_DATA);
+  viewReload();
+}
+
+/* ----- telas de quem recebe ----- */
+function viewBarHtml() {
+  var busy = S.ui.vbusy === 'upd', dirty = viewDirty(), sure = S.ui.vsure;
+  return '<div class="card viewbar"><h2>Você está vendo uma cópia' + ib('ver2') + '</h2>' + ibox('ver2', INFO.ver2) +
+    '<p>É a carteira de quem compartilhou com você' + (VIEW.at ? ', como estava em ' + esc(shortD(dayOf(VIEW.at))) + ' às ' + esc(timeOf(VIEW.at)) : '') + '. Pode mexer e testar à vontade: o que você mudar fica só neste navegador e não altera a carteira original.</p>' +
+    (S.ui.verr ? '<p class="notice">' + esc(VERR[S.ui.verr] || VERR.server) + '</p>' : '') +
+    '<div class="row actions"><button class="btn primary" type="button" data-act="vw-upd"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Atualizando…' : sure === 'upd' ? 'Toque de novo: apaga o que você mudou' : 'Atualizar a cópia') + '</button>' +
+    '<button class="btn' + (sure === 'exit' ? ' danger' : '') + '" type="button" data-act="vw-exit"' + (busy ? ' disabled' : '') + '>' + (sure === 'exit' ? 'Toque de novo: apaga esta cópia' : 'Sair da visualização') + '</button></div>' +
+    (dirty ? '<p class="muted">Você mexeu nesta cópia. Ao atualizar ou sair, o que você mudou aqui é apagado.</p>' : '') + '</div>';
+}
+function renderViewBar() {
+  var el = $('#viewbar'); if (!el) return;
+  el.innerHTML = VIEW ? viewBarHtml() : '';
+}
+function viewJoinHtml() {
+  var j = S.ui.vjoin, dis = j.busy ? ' disabled' : '';
+  if (!j.ask) { // navegador sem dados próprios: abre direto; só aparece este cartão enquanto abre ou se der erro
+    var retry = j.err && j.err !== 'unknown' && j.err !== 'quota';
+    return '<div class="card"><h2>' + (j.err ? 'Não consegui abrir a carteira' : 'Abrindo a carteira compartilhada…') + '</h2>' +
+      (j.err ? '<p class="notice">' + esc(VERR[j.err] || VERR.server) + '</p><div class="row actions">' +
+        (retry ? '<button class="btn primary" type="button" data-act="vj-go"' + dis + '>' + (j.busy ? 'Abrindo…' : 'Tentar de novo') + '</button>' : '') +
+        '<button class="btn" type="button" data-act="vj-no"' + (j.busy ? ' disabled' : '') + '>Fechar</button></div>' : '<p class="muted">Só um instante.</p>') + '</div>';
+  }
+  return '<div class="card"><h2>' + (j.swap ? 'Trocar a cópia que você está vendo?' : 'Ver uma carteira compartilhada com você?') + '</h2>' +
+    '<p>Você abriu um link “só para ver”. Ele mostra uma cópia da carteira de quem compartilhou: ações, rendimentos e regras. Pode testar à vontade: o que você mudar fica só neste navegador e não altera a carteira original.</p>' +
+    '<p class="muted">' + (j.swap ? 'Os testes que você fez na cópia atual serão apagados.' : 'Os seus próprios dados neste navegador não são tocados. Para voltar a eles, é só tocar em “Sair da visualização”.') + '</p>' +
+    (j.err ? '<p class="notice">' + esc(VERR[j.err] || VERR.server) + '</p>' : '') +
+    '<div class="row actions"><button class="btn primary" type="button" data-act="vj-go"' + dis + '>' + (j.busy ? 'Abrindo…' : j.swap ? 'Trocar' : 'Abrir a carteira') + '</button>' +
+    '<button class="btn" type="button" data-act="vj-no"' + (j.busy ? ' disabled' : '') + '>' + (j.err ? 'Fechar' : 'Agora não') + '</button></div></div>';
+}
+
+/* ----- quem cria o link (o dono) ----- */
+function shareOk(d) {
+  if (!d || typeof d !== 'object' || typeof d.vid !== 'string' || !SYNC_ID.test(d.vid) || !Number.isFinite(d.at)) return null;
+  return { vid: d.vid, at: d.at };
+}
+function shareLinkUrl() { return location.origin + location.pathname + '#ver=' + SHARE.vid; }
+// O que vai na cópia: tudo da carteira, menos o diário e a própria chave do link. Documento grande demais (acima do limite) fica de fora.
+function shareDocs() {
+  var docs = {};
+  DBH.raw.keys().forEach(function (p) {
+    if (!syncPathOk(p) || /^diario\//.test(p) || p === 'robo/share') return;
+    var v = DBH.raw.get(p);
+    if (!v || typeof v !== 'object' || Array.isArray(v) || JSON.stringify(v).length > SYNC_DOC_MAX) return;
+    docs[p] = v;
+  });
+  return docs;
+}
+function shareErr(res, update) {
+  if (res.net) return 'net';
+  var e = res.json && typeof res.json.err === 'string' ? res.json.err : '';
+  if (!e && (res.status === 404 || res.status === 405 || res.status === 501)) return 'noserver'; // a função não está instalada neste site
+  if (res.status === 404 || res.status === 410) return update ? 'dead' : 'missing';
+  if (res.status === 413) return 'big';
+  return 'server';
+}
+function shareSend(update) {
+  if (!SY.id || !DBH || !DBH.raw || S.ui.shBusy) return;
+  S.ui.shBusy = update ? 'upd' : 'new'; S.ui.shErr = ''; sched();
+  var body = { v: 1, id: SY.id, op: 'share', docs: shareDocs() };
+  if (update && SHARE) body.view = SHARE.vid;
+  syncHttp('POST', body).then(function (res) {
+    var j = res.json;
+    if (res.status === 200 && j && j.ok === true && typeof j.view === 'string' && SYNC_ID.test(j.view)) {
+      syncClock(j.now);
+      return DBH.doc('robo/share').set({ vid: j.view, at: Number.isFinite(j.now) ? j.now : nowS(), updatedAt: Date.now() }).then(function () {
+        S.ui.shBusy = ''; S.ui.shShow = ''; sched();
+        toast(update ? 'Pronto: a pessoa vê a cópia nova quando tocar em “Atualizar a cópia”.' : 'Link criado. Copie e envie para a pessoa.');
+      });
+    }
+    S.ui.shBusy = ''; S.ui.shErr = shareErr(res, update);
+    if (update && S.ui.shErr === 'dead' && DBH.raw.has('robo/share')) return DBH.doc('robo/share').delete().then(sched);
+    sched();
+  }).catch(function (e) { console.error(e); S.ui.shBusy = ''; S.ui.shErr = 'server'; sched(); });
+}
+function shareStop() {
+  if (!SY.id || S.ui.shBusy) return;
+  if (!S.ui.shSure) { S.ui.shSure = true; sched(); setTimeout(function () { if (S.ui.shSure) { S.ui.shSure = false; sched(); } }, 6000); return; }
+  S.ui.shSure = false; S.ui.shBusy = 'stop'; S.ui.shErr = ''; sched();
+  syncHttp('POST', { v: 1, id: SY.id, op: 'unshare' }).then(function (res) {
+    S.ui.shBusy = '';
+    if (res.status === 200 && res.json && res.json.ok === true) {
+      S.ui.shShow = '';
+      var p = DBH.raw.has('robo/share') ? DBH.doc('robo/share').delete() : Promise.resolve();
+      return p.then(function () { toast('Pronto: o link parou de funcionar.'); sched(); });
+    }
+    S.ui.shErr = res.net ? 'net' : 'server'; sched();
+  }).catch(function (e) { console.error(e); S.ui.shBusy = ''; S.ui.shErr = 'server'; sched(); });
+}
+function shareCopy() {
+  if (!SHARE) return;
+  var url = shareLinkUrl();
+  function fallback() {
+    S.ui.shShow = url; sched();
+    toast('Não consegui copiar sozinho: selecione o link abaixo e copie.');
+    setTimeout(function () { var t = document.getElementById('sh-out'); if (t) { t.focus(); t.select(); } }, 60);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(function () { toast('Link copiado. Cole no WhatsApp ou no e-mail da pessoa.'); }, fallback);
+  else fallback();
+}
+function shareShare() {
+  if (!SHARE) return;
+  if (!navigator.share) { shareCopy(); return; }
+  navigator.share({ title: 'Carteira de renda', text: 'Abra este link para ver a minha carteira e testar o site. O que você mexer fica só no seu navegador.', url: shareLinkUrl() })
+    .catch(function (e) { if (!e || e.name !== 'AbortError') shareCopy(); });
+}
+
+/* ----- telas do dono ----- */
+function shareNoSyncHtml() {
+  return '<p class="muted">Aqui você cria um link para outra pessoa ver suas ações, rendimentos e movimentações e testar o site. Ela vê uma cópia: o que ela mexer não muda nada seu.' + ib('ver') + '</p>' + ibox('ver', INFO.ver) +
+    '<p class="notice">Para criar o link, ligue antes a sincronização: é ela que guarda a cópia na nuvem do seu site.</p>' +
+    '<div class="row actions"><button class="btn primary" type="button" data-act="sy-open">Ir para a sincronização</button></div>';
+}
+function shareOffHtml() {
+  var busy = S.ui.shBusy === 'new';
+  return '<p class="muted">Crie um link para outra pessoa ver sua carteira (ações, rendimentos e movimentações) e testar o site.' + ib('ver') + '</p>' + ibox('ver', INFO.ver) +
+    '<p class="muted">Ela recebe uma cópia no navegador dela. O que ela mexer fica só lá e não muda nada seu. O diário (suas anotações) não vai na cópia.</p>' +
+    '<div class="row actions"><button class="btn primary" type="button" data-act="sh-new"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Criando…' : 'Criar link para só ver') + '</button></div>' +
+    (S.ui.shErr ? '<p class="notice">' + esc(SHERR[S.ui.shErr] || SHERR.server) + '</p>' : '') +
+    '<p class="muted">Nunca envie o link de sincronização nem o link de recuperação: eles dão acesso aos seus dados. Envie só o link criado aqui.</p>';
+}
+function shareOnHtml() {
+  var busy = S.ui.shBusy, share = !!navigator.share, end = SHARE.at + VIEW_TTL;
+  return '<p class="sy-st ok"><span class="dot" aria-hidden="true"></span><span>Link ativo. Cópia feita em ' + esc(shortD(dayOf(SHARE.at))) + ' às ' + esc(timeOf(SHARE.at)) + '.</span></p>' +
+    '<p class="muted">A pessoa vê a carteira como estava nesse momento. O que você mudar depois só aparece para ela quando você tocar em “Atualizar o que ela vê” e ela tocar em “Atualizar a cópia”. O link vale até ' + esc(shortD(dayOf(end))) + ' (30 dias depois da última atualização).' + ib('ver') + '</p>' + ibox('ver', INFO.ver) +
+    (S.ui.shErr ? '<p class="notice">' + esc(SHERR[S.ui.shErr] || SHERR.server) + '</p>' : '') +
+    '<div class="row actions">' + (share ? '<button class="btn primary" type="button" data-act="sh-send">Enviar link</button>' : '') +
+    '<button class="btn' + (share ? '' : ' primary') + '" type="button" data-act="sh-copy">Copiar link</button>' +
+    '<button class="btn" type="button" data-act="sh-upd"' + (busy ? ' disabled' : '') + '>' + (busy === 'upd' ? 'Atualizando…' : 'Atualizar o que ela vê') + '</button></div>' +
+    (S.ui.shShow ? '<label class="field"><span class="lbl">Selecione tudo e copie</span><textarea class="in ta" id="sh-out" readonly>' + esc(S.ui.shShow) + '</textarea></label>' : '') +
+    '<div class="row actions"><button class="btn danger" type="button" data-act="sh-stop"' + (busy ? ' disabled' : '') + '>' + (busy === 'stop' ? 'Parando…' : S.ui.shSure ? 'Toque de novo para parar' : 'Parar de compartilhar') + '</button></div>' +
+    '<p class="muted">Ao parar, o link deixa de funcionar na hora. Quem já abriu continua com a cópia no navegador dela, mas não consegue atualizar. Nunca envie o link de sincronização nem o de recuperação: só este.</p>';
+}
+function renderShare() {
+  var det = $('#m-share'), el = $('#share'), show = !!(hosted && localMode && DBH && DBH.raw && !VIEW);
+  if (!det || !el) return;
+  if (det.hidden === show) det.hidden = !show;
+  if (!show) { el.innerHTML = ''; return; }
+  var sum = $('#share-sum'), t = SY.id && SHARE ? 'Mostrar a carteira para outra pessoa: link ativo' : 'Mostrar a carteira para outra pessoa (só ver)';
+  if (sum && sum.textContent !== t) sum.textContent = t;
+  el.innerHTML = !SY.id ? shareNoSyncHtml() : SHARE ? shareOnHtml() : shareOffHtml();
+}
+
+var VIEW_ACTIONS = {
+  'vw-upd': function () { viewRefresh(); },
+  'vw-exit': function () { viewExit(); },
+  'vj-go': function () { viewGo(); },
+  'vj-no': function () { S.ui.vjoin = null; sched(); },
+  'sh-new': function () { shareSend(false); },
+  'sh-upd': function () { shareSend(true); },
+  'sh-stop': function () { shareStop(); },
+  'sh-copy': function () { shareCopy(); },
+  'sh-send': function () { shareShare(); }
 };
 
 /* ---------- eventos ---------- */
@@ -3420,7 +3719,7 @@ var ACTIONS = {
     setTimeout(function () { var e = document.getElementById('np-price'); if (e) e.focus(); }, 0);
   }
 };
-Object.assign(ACTIONS, SYNC_ACTIONS);
+Object.assign(ACTIONS, SYNC_ACTIONS, VIEW_ACTIONS);
 document.addEventListener('click', function (e) {
   var b = e.target.closest && e.target.closest('[data-act]'); if (!b) return;
   releaseFocus();
@@ -3462,6 +3761,7 @@ function subscribe() {
     COMMIT.cfg = Object.assign({}, S.cfg);
     S.cfgDoc = !!d; S.ready.cfg = true; sched(); maybeMigrate();
   }, onErr);
+  DBH.doc('robo/share').onSnapshot(function (s) { SHARE = shareOk(s.exists ? s.data() : null); sched(); }, onErr);
   DBH.doc('renda/config').onSnapshot(function (s) {
     var d = s.exists ? s.data() : null;
     S.renda = rendaCfg(d); COMMIT.renda = Object.assign({}, S.renda);
@@ -3505,7 +3805,7 @@ function initSample() {
 function installDiff() {
   var desc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
   if (!desc || !desc.set) return;
-  ['#verdict', '#linkbox', '#synchint', '#quotebox', '#summary', '#print-out', '#cards', '#keep', '#buy', '#radar', '#newpos', '#move', '#rules', '#guia', '#closed', '#diary', '#sync', '#backup'].forEach(function (sel) {
+  ['#viewbar', '#verdict', '#linkbox', '#synchint', '#quotebox', '#summary', '#print-out', '#cards', '#keep', '#buy', '#radar', '#newpos', '#move', '#rules', '#guia', '#closed', '#diary', '#sync', '#share', '#backup'].forEach(function (sel) {
     var el = document.querySelector(sel), last = null; if (!el) return;
     Object.defineProperty(el, 'innerHTML', {
       configurable: true,
@@ -3523,15 +3823,16 @@ function installDiff() {
 function boot() {
   var hasClaude = !!(window.claude && typeof window.claude.use === 'function');
   hosted = !hasClaude; // fora do Claude: site publicado, dados no navegador e cotação automática
+  if (hosted) viewLoad();
   installDiff();
-  if (hosted) { syncLoad(); readLink(); try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {} } // pede ao navegador para não apagar os dados
+  if (hosted) { if (!VIEW) syncLoad(); readLink(); window.addEventListener('hashchange', function () { readLink(); sched(); }); try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {} } // pede ao navegador para não apagar os dados
   render();
   Promise.resolve(hasClaude ? window.claude.use('db') : null).catch(function () { return null; }).then(function (db) {
     if (!db) { localMode = true; db = makeLocalDb(); }
     DBH = db; subscribe(); initSample();
     setInterval(sched, 60000);
     if (hosted) startAuto();
-    if (hosted && localMode && DBH.raw) syncStart();
+    if (hosted && localMode && DBH.raw && !VIEW) syncStart();
   });
 }
 boot();

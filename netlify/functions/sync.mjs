@@ -2,7 +2,7 @@
 // Guarda os dados da carteira (um bloco por "grupo" de aparelhos) no Netlify Blobs do próprio site.
 // O acesso é pela chave secreta do grupo (gerada no navegador, nunca gravada aqui: só o hash dela vira nome do bloco).
 // Mescla documento por documento: vence a edição mais recente; apagar vira "lápide" para o apagado também chegar aos outros aparelhos.
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 export const config = { path: '/api/sync' };
 
@@ -15,11 +15,18 @@ const MAX_GROUPS = 40;            // grupos neste site (uso pessoal: 1 ou 2)
 const TOMB_MS = 120 * 86400000;   // lápides com mais de 120 dias são limpas
 const FUTURE_MS = 15000;          // carimbo no futuro (relógio errado) é cortado para agora + 15 s
 const TRIES = 6;
+// Link "só para ver": uma CÓPIA da carteira (feita pelo dono) que outra pessoa pode ler. A chave de leitura é outra, gerada aqui,
+// e não dá acesso a nada do grupo: não serve para sincronizar, apagar nem compartilhar. Vale por 30 dias desde a última atualização.
+const VIEW_TTL_MS = 30 * 86400000;
+const MAX_SNAP = 600000;          // caracteres da cópia inteira
+const MAX_SNAP_DOCS = 1500;       // documentos na cópia
 
 const ID_RE = /^[A-Za-z0-9_-]{32,64}$/;
 const PATH_RE = /^[a-z][a-z0-9_]{0,29}\/[A-Za-z0-9_\-.~:@+]{1,120}$/;
 
 const hash = (id) => createHash('sha256').update('robo-b3:' + id).digest('hex');
+const vhash = (id) => createHash('sha256').update('robo-b3-view:' + id).digest('hex');
+const newViewId = () => randomBytes(24).toString('base64url');
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 
 function reply(status, body) {
@@ -40,6 +47,57 @@ export async function handle(req, store, now = Date.now()) {
   if (!isObj(b) || b.v !== 1 || typeof b.id !== 'string' || !ID_RE.test(b.id)) return fail(400, 'bad_request');
   const h = hash(b.id), gk = 'g/' + h, xk = 'x/' + h;
 
+  if (b.op === 'view') { // aqui "id" é a chave de LEITURA; só devolve a cópia publicada pelo dono
+    const pk = 'p/' + vhash(b.id), snap = await store.get(pk);
+    if (!snap || !isObj(snap.data) || !isObj(snap.data.docs) || !Number.isFinite(snap.data.at)) return fail(404, 'unknown');
+    if (now - snap.data.at > VIEW_TTL_MS) { await store.del(pk); return fail(404, 'unknown'); }
+    return reply(200, { ok: true, now, at: snap.data.at, docs: snap.data.docs });
+  }
+
+  if (b.op === 'share') { // dono (chave do grupo) publica a cópia: sem "view" cria um link novo (e derruba o anterior); com "view" atualiza o que já existe
+    if (!isObj(b.docs) || (b.view !== undefined && (typeof b.view !== 'string' || !ID_RE.test(b.view)))) return fail(400, 'bad_request');
+    const keys = Object.keys(b.docs);
+    if (keys.length > MAX_SNAP_DOCS) return fail(413, 'too_big');
+    const docs = {};
+    for (const p of keys) {
+      const v = b.docs[p];
+      if (!PATH_RE.test(p) || !isObj(v)) return fail(400, 'bad_request');
+      if (JSON.stringify(v).length > MAX_DOC) return fail(413, 'too_big');
+      docs[p] = v;
+    }
+    const snap = { v: 1, g: h, at: now, docs };
+    if (JSON.stringify(snap).length > MAX_SNAP) return fail(413, 'too_big');
+    if (!(await store.get(gk))) return (await store.get(xk)) ? fail(410, 'wiped') : fail(404, 'unknown');
+    const sk = 's/' + h;
+    if (b.view !== undefined) {
+      const pk = 'p/' + vhash(b.view);
+      for (let n = 0; n < TRIES; n++) {
+        const cur = await store.get(pk);
+        if (!cur || !isObj(cur.data) || cur.data.g !== h || now - cur.data.at > VIEW_TTL_MS) return fail(404, 'unknown'); // só o dono atualiza; link derrubado ou vencido não volta
+        if (await store.setIfMatch(pk, snap, cur.etag)) return reply(200, { ok: true, now, view: b.view });
+      }
+      return fail(503, 'busy');
+    }
+    const view = newViewId(), vh = vhash(view);
+    await store.set('p/' + vh, snap);
+    for (let n = 0; n < TRIES; n++) {
+      const cur = await store.get(sk), next = { v: 1, vh, at: now };
+      const ok = cur ? await store.setIfMatch(sk, next, cur.etag) : await store.setIfNew(sk, next);
+      if (!ok) continue;
+      if (cur && isObj(cur.data) && typeof cur.data.vh === 'string' && cur.data.vh !== vh) await store.del('p/' + cur.data.vh);
+      return reply(200, { ok: true, now, view });
+    }
+    await store.del('p/' + vh);
+    return fail(503, 'busy');
+  }
+
+  if (b.op === 'unshare') { // dono para de compartilhar (pode repetir sem erro)
+    const sk = 's/' + h, cur = await store.get(sk);
+    if (cur && isObj(cur.data) && typeof cur.data.vh === 'string') await store.del('p/' + cur.data.vh);
+    await store.del(sk);
+    return reply(200, { ok: true, now });
+  }
+
   if (b.op === 'create') {
     if (await store.get(xk)) return fail(410, 'wiped');
     if (await store.get(gk)) return fail(409, 'exists');
@@ -53,6 +111,9 @@ export async function handle(req, store, now = Date.now()) {
     if (!cur) return (await store.get(xk)) ? reply(200, { ok: true, now }) : fail(404, 'unknown');
     await store.set(xk, { v: 1, wiped: now });
     await store.del(gk);
+    const sh = await store.get('s/' + h); // o link para só ver também some
+    if (sh && isObj(sh.data) && typeof sh.data.vh === 'string') await store.del('p/' + sh.data.vh);
+    await store.del('s/' + h);
     return reply(200, { ok: true, now });
   }
 
