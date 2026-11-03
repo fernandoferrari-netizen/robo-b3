@@ -1,0 +1,11 @@
+{
+  "name": "robo-b3",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Robô B3 - carteira de renda (site estático + sincronização entre aparelhos no Netlify)",
+  "type": "module",
+  "engines": { "node": ">=22.12.0" },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.7"
+  }
+}

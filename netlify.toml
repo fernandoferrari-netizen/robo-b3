@@ -1,0 +1,10 @@
+# Site estático em public/ e a função de sincronização em netlify/functions/sync.mjs (endereço /api/sync).
+[build]
+  publish = "public"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  node_bundler = "esbuild"
